@@ -20,7 +20,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8554823712:AAGUFJPwjzVIOwrCTF9qV5pDbm4FivFxXrQ")
+#TOKEN = os.getenv("TELEGRAM_TOKEN", "8554823712:AAGUFJPwjzVIOwrCTF9qV5pDbm4FivFxXrQ")
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+if not TOKEN:
+    raise ValueError("TELEGRAM_TOKEN não configurado")
+
 DATA_FILE = "produtos.json"
 
 AGUARDANDO_URL, AGUARDANDO_PRECO = range(2)
