@@ -17,7 +17,9 @@ from database import (
     criar_tabela,
     adicionar_produto,
     listar_produtos,
-    remover_produto
+    remover_produto,
+    buscar_historico_produto,
+    buscar_resumo_historico
 )
 
 from price_checker import checar_precos
@@ -33,14 +35,14 @@ logging.basicConfig(
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", 60))
 
-NOME, LINK, PRECO, REMOVER_ID = range(4)
+NOME, LINK, PRECO, REMOVER_ID, HISTORICO_ID = range(5)
 
 
 def menu_principal():
     teclado = [
         ["➕ Adicionar produto", "📦 Listar produtos"],
-        ["🔎 Checar preços", "🗑 Remover produto"],
-        ["/start"]
+        ["🔎 Checar preços", "📈 Histórico"],
+        ["🗑 Remover produto", "/start"]
     ]
 
     return ReplyKeyboardMarkup(
@@ -68,6 +70,7 @@ Você pode:
 ➕ Adicionar produto
 📦 Listar produtos
 🔎 Checar preços
+📈 Histórico
 🗑 Remover produto
 """
 
@@ -100,9 +103,7 @@ async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["nome"] = nome
 
-    await update.message.reply_text(
-        "Agora envie o link do produto."
-    )
+    await update.message.reply_text("Agora envie o link do produto.")
 
     return LINK
 
@@ -262,6 +263,89 @@ async def receber_id_remocao(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return REMOVER_ID
 
 
+async def iniciar_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    produtos = listar_produtos(chat_id)
+
+    if not produtos:
+        await update.message.reply_text(
+            "Você ainda não tem produtos cadastrados.",
+            reply_markup=menu_principal()
+        )
+        return ConversationHandler.END
+
+    mensagem = "📈 De qual produto você quer ver o histórico?\n\n"
+
+    for produto in produtos:
+        produto_id, nome, url, preco_alvo, ultimo_preco, ativo = produto
+        ultimo = (
+            f"R$ {ultimo_preco:.2f}"
+            if ultimo_preco is not None
+            else "sem preço ainda"
+        )
+        mensagem += f"ID: {produto_id} - {nome} ({ultimo})\n"
+
+    mensagem += "\nEnvie apenas o ID do produto."
+
+    await update.message.reply_text(
+        mensagem,
+        reply_markup=menu_cancelar()
+    )
+
+    return HISTORICO_ID
+
+
+async def receber_id_historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+
+    if texto == "❌ Cancelar":
+        return await cancelar(update, context)
+
+    try:
+        produto_id = int(texto)
+        chat_id = update.message.chat_id
+
+        resumo = buscar_resumo_historico(chat_id, produto_id)
+        historico = buscar_historico_produto(chat_id, produto_id, limite=10)
+
+        if not resumo or not historico:
+            await update.message.reply_text(
+                "Ainda não existe histórico para esse produto.\n\n"
+                "Use 🔎 Checar preços primeiro ou aguarde a checagem automática.",
+                reply_markup=menu_principal()
+            )
+            return ConversationHandler.END
+
+        nome, menor_preco, maior_preco, preco_medio, total_registros = resumo
+
+        mensagem = (
+            f"📈 Histórico de preço\n\n"
+            f"Produto: {nome}\n\n"
+            f"Menor preço: R$ {menor_preco:.2f}\n"
+            f"Maior preço: R$ {maior_preco:.2f}\n"
+            f"Preço médio: R$ {preco_medio:.2f}\n"
+            f"Registros: {total_registros}\n\n"
+            f"Últimas checagens:\n"
+        )
+
+        for item in historico:
+            _, preco, data_hora = item
+            mensagem += f"- {data_hora} | R$ {preco:.2f}\n"
+
+        await update.message.reply_text(
+            mensagem,
+            reply_markup=menu_principal()
+        )
+
+        return ConversationHandler.END
+
+    except Exception:
+        await update.message.reply_text(
+            "ID inválido. Envie apenas o número do produto."
+        )
+        return HISTORICO_ID
+
+
 async def checar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
 
@@ -300,18 +384,6 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     return ConversationHandler.END
-
-
-async def comando_antigo_adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Agora o cadastro é guiado.\n\nClique em ➕ Adicionar produto ou envie /adicionar.",
-        reply_markup=menu_principal()
-    )
-    return await iniciar_adicao(update, context)
-
-
-async def comando_antigo_remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await iniciar_remocao(update, context)
 
 
 async def checar_agendado(app):
@@ -357,8 +429,23 @@ def main():
         ]
     )
 
+    conversa_historico = ConversationHandler(
+        entry_points=[
+            CommandHandler("historico", iniciar_historico),
+            MessageHandler(filters.Regex("^📈 Histórico$"), iniciar_historico)
+        ],
+        states={
+            HISTORICO_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_historico)],
+        },
+        fallbacks=[
+            CommandHandler("cancelar", cancelar),
+            MessageHandler(filters.Regex("^❌ Cancelar$"), cancelar)
+        ]
+    )
+
     app.add_handler(conversa_adicionar)
     app.add_handler(conversa_remover)
+    app.add_handler(conversa_historico)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("listar", listar))

@@ -24,6 +24,16 @@ def criar_tabela():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historico_precos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            produto_id INTEGER NOT NULL,
+            preco REAL NOT NULL,
+            data_hora DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (produto_id) REFERENCES produtos(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -62,6 +72,11 @@ def listar_produtos(chat_id):
 def remover_produto(chat_id, produto_id):
     conn = conectar()
     cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM historico_precos
+        WHERE produto_id = ?
+    """, (produto_id,))
 
     cursor.execute("""
         DELETE FROM produtos
@@ -114,3 +129,66 @@ def marcar_alerta(produto_id, enviado):
 
     conn.commit()
     conn.close()
+
+
+def salvar_historico_preco(produto_id, preco):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO historico_precos
+        (produto_id, preco)
+        VALUES (?, ?)
+    """, (produto_id, preco))
+
+    conn.commit()
+    conn.close()
+
+
+def buscar_historico_produto(chat_id, produto_id, limite=10):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 
+            p.nome,
+            h.preco,
+            h.data_hora
+        FROM historico_precos h
+        INNER JOIN produtos p
+            ON p.id = h.produto_id
+        WHERE h.produto_id = ?
+          AND p.chat_id = ?
+        ORDER BY h.data_hora DESC
+        LIMIT ?
+    """, (produto_id, chat_id, limite))
+
+    historico = cursor.fetchall()
+    conn.close()
+
+    return historico
+
+
+def buscar_resumo_historico(chat_id, produto_id):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            p.nome,
+            MIN(h.preco) AS menor_preco,
+            MAX(h.preco) AS maior_preco,
+            AVG(h.preco) AS preco_medio,
+            COUNT(h.id) AS total_registros
+        FROM historico_precos h
+        INNER JOIN produtos p
+            ON p.id = h.produto_id
+        WHERE h.produto_id = ?
+          AND p.chat_id = ?
+        GROUP BY p.nome
+    """, (produto_id, chat_id))
+
+    resumo = cursor.fetchone()
+    conn.close()
+
+    return resumo

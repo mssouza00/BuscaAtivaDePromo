@@ -3,7 +3,8 @@ import asyncio
 from database import (
     buscar_produtos_ativos,
     atualizar_preco,
-    marcar_alerta
+    marcar_alerta,
+    salvar_historico_preco
 )
 from scrapers import buscar_preco
 
@@ -32,6 +33,7 @@ async def checar_precos(app, chat_id_manual=None):
                 continue
 
             atualizar_preco(produto_id, preco_atual)
+            salvar_historico_preco(produto_id, preco_atual)
 
             if preco_atual <= preco_alvo:
                 mensagem = (
