@@ -27,9 +27,10 @@ def limpar_preco(texto):
     if not texto:
         return None
 
-    texto = texto.replace("\xa0", " ").replace("R$", "").strip()
+    texto = texto.replace("\xa0", " ")
+    texto = texto.replace("R$", "").strip()
 
-    match = re.search(r"[\d\.]+,\d{2}", texto)
+    match = re.search(r"[\d\.]+,\d{2}|[\d\.]+", texto)
 
     if not match:
         return None
@@ -64,7 +65,41 @@ def buscar_preco_json(soup):
     return None
 
 
-def buscar_preco_html(soup):
+def buscar_preco_mercado_livre(soup):
+    seletores = [
+        ".ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-price__second-line .andes-money-amount__fraction",
+        ".ui-pdp-price__second-line",
+        ".andes-money-amount__fraction",
+        ".price-tag-fraction"
+    ]
+
+    for seletor in seletores:
+        elemento = soup.select_one(seletor)
+
+        if elemento:
+            texto = elemento.get_text(" ")
+            preco = limpar_preco(texto)
+
+            if preco:
+                return preco
+
+    texto_pagina = soup.get_text(" ")
+
+    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto_pagina)
+
+    if match:
+        return limpar_preco(match.group())
+
+    match = re.search(r"R\$\s?[\d\.]+", texto_pagina)
+
+    if match:
+        return limpar_preco(match.group())
+
+    return None
+
+
+def buscar_preco_amazon(soup):
     seletores = [
         "#corePrice_feature_div .a-offscreen",
         "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -94,6 +129,33 @@ def buscar_preco_html(soup):
     return None
 
 
+def buscar_preco_generico(soup):
+    seletores = [
+        ".price",
+        ".product-price",
+        ".sale-price",
+        ".current-price",
+        "[data-testid='price']"
+    ]
+
+    for seletor in seletores:
+        elemento = soup.select_one(seletor)
+
+        if elemento:
+            preco = limpar_preco(elemento.get_text(" "))
+            if preco:
+                return preco
+
+    texto = soup.get_text(" ")
+
+    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
+
+    if match:
+        return limpar_preco(match.group())
+
+    return None
+
+
 def buscar_preco(url):
     url = limpar_url_amazon(url)
 
@@ -108,21 +170,31 @@ def buscar_preco(url):
             print(f"Erro HTTP {response.status_code} ao acessar {url}")
             return None
 
-        html = response.text
+        html = response.text.lower()
 
-        if "captcha" in html.lower() or "digite os caracteres" in html.lower():
-            print("Amazon retornou captcha/bloqueio.")
+        if "captcha" in html or "digite os caracteres" in html:
+            print("Site retornou captcha/bloqueio.")
             return None
 
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(response.text, "html.parser")
 
         preco_json = buscar_preco_json(soup)
         if preco_json:
             return preco_json
 
-        preco_html = buscar_preco_html(soup)
-        if preco_html:
-            return preco_html
+        if "mercadolivre.com" in url or "mercadolivre.com.br" in url:
+            preco_ml = buscar_preco_mercado_livre(soup)
+            if preco_ml:
+                return preco_ml
+
+        if "amazon.com.br" in url or "amazon.com" in url:
+            preco_amazon = buscar_preco_amazon(soup)
+            if preco_amazon:
+                return preco_amazon
+
+        preco_generico = buscar_preco_generico(soup)
+        if preco_generico:
+            return preco_generico
 
         print("Preço não encontrado no HTML.")
         return None
