@@ -168,12 +168,11 @@ async def remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=menu_principal()
         )
 
-
 async def checar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
 
     await update.message.reply_text(
-        "🔎 Checando preços agora...",
+        "🔎 Iniciando checagem...",
         reply_markup=menu_principal()
     )
 
@@ -189,14 +188,10 @@ async def checar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    mensagem = "✅ Resultado da checagem:\n\n"
-    mensagem += "\n\n--------------------\n\n".join(resultados)
-
     await update.message.reply_text(
-        mensagem,
+        "✅ Checagem finalizada.",
         reply_markup=menu_principal()
     )
-
 
 async def checar_agendado(app):
     logging.info("Executando checagem agendada...")
