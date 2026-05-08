@@ -71,7 +71,8 @@ def buscar_preco_mercado_livre(soup):
         ".ui-pdp-price__second-line .andes-money-amount__fraction",
         ".ui-pdp-price__second-line",
         ".andes-money-amount__fraction",
-        ".price-tag-fraction"
+        ".price-tag-fraction",
+        ".poly-price__current .andes-money-amount__fraction",
     ]
 
     for seletor in seletores:
@@ -214,33 +215,67 @@ def buscar_produtos_mercado_livre(termo, limite=5):
             print(f"Erro HTTP {response.status_code} na busca ML")
             return []
 
+        html_lower = response.text.lower()
+
+        if "captcha" in html_lower or "digite os caracteres" in html_lower:
+            print("Mercado Livre retornou captcha/bloqueio.")
+            return []
+
         soup = BeautifulSoup(response.text, "html.parser")
 
-        cards = soup.select(".ui-search-result__wrapper")
         resultados = []
 
-        for card in cards:
+        links = soup.select("a.poly-component__title")
+
+        if not links:
+            links = soup.select("a.ui-search-link")
+
+        if not links:
+            links = soup.select("a[href*='/MLB-']")
+
+        for link_el in links:
             if len(resultados) >= limite:
                 break
 
-            titulo_el = card.select_one(".ui-search-item__title")
-            link_el = card.select_one("a.ui-search-link")
-            preco_el = card.select_one(".andes-money-amount__fraction")
+            try:
+                nome = link_el.get_text(" ").strip()
+                link = link_el.get("href")
 
-            if not titulo_el or not link_el or not preco_el:
-                continue
+                if not nome or not link:
+                    continue
 
-            nome = titulo_el.get_text(" ").strip()
-            link = link_el.get("href")
-            preco = limpar_preco(preco_el.get_text(" "))
+                card = link_el
 
-            if nome and link and preco:
+                for _ in range(6):
+                    if card.parent:
+                        card = card.parent
+
+                    preco_el = (
+                        card.select_one(".andes-money-amount__fraction")
+                        or card.select_one(".price-tag-fraction")
+                        or card.select_one(".poly-price__current .andes-money-amount__fraction")
+                    )
+
+                    if preco_el:
+                        break
+
+                if not preco_el:
+                    continue
+
+                preco = limpar_preco(preco_el.get_text(" "))
+
+                if not preco:
+                    continue
+
                 resultados.append({
                     "nome": nome,
                     "url": link,
                     "preco": preco,
                     "site": "Mercado Livre"
                 })
+
+            except Exception:
+                continue
 
         return resultados
 
