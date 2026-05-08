@@ -2,6 +2,7 @@ import re
 import json
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
 
 HEADERS = {
@@ -19,7 +20,6 @@ def limpar_url_amazon(url):
     if "amazon.com.br/dp/" in url:
         codigo = url.split("/dp/")[1].split("/")[0].split("?")[0]
         return f"https://www.amazon.com.br/dp/{codigo}"
-
     return url
 
 
@@ -78,21 +78,17 @@ def buscar_preco_mercado_livre(soup):
         elemento = soup.select_one(seletor)
 
         if elemento:
-            texto = elemento.get_text(" ")
-            preco = limpar_preco(texto)
-
+            preco = limpar_preco(elemento.get_text(" "))
             if preco:
                 return preco
 
     texto_pagina = soup.get_text(" ")
 
     match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto_pagina)
-
     if match:
         return limpar_preco(match.group())
 
     match = re.search(r"R\$\s?[\d\.]+", texto_pagina)
-
     if match:
         return limpar_preco(match.group())
 
@@ -147,7 +143,6 @@ def buscar_preco_generico(soup):
                 return preco
 
     texto = soup.get_text(" ")
-
     match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
 
     if match:
@@ -170,9 +165,9 @@ def buscar_preco(url):
             print(f"Erro HTTP {response.status_code} ao acessar {url}")
             return None
 
-        html = response.text.lower()
+        html_lower = response.text.lower()
 
-        if "captcha" in html or "digite os caracteres" in html:
+        if "captcha" in html_lower or "digite os caracteres" in html_lower:
             print("Site retornou captcha/bloqueio.")
             return None
 
@@ -202,3 +197,53 @@ def buscar_preco(url):
     except Exception as erro:
         print(f"Erro no scraper: {erro}")
         return None
+
+
+def buscar_produtos_mercado_livre(termo, limite=5):
+    termo_url = quote_plus(termo)
+    url_busca = f"https://lista.mercadolivre.com.br/{termo_url}"
+
+    try:
+        response = requests.get(
+            url_busca,
+            headers=HEADERS,
+            timeout=8
+        )
+
+        if response.status_code != 200:
+            print(f"Erro HTTP {response.status_code} na busca ML")
+            return []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        cards = soup.select(".ui-search-result__wrapper")
+        resultados = []
+
+        for card in cards:
+            if len(resultados) >= limite:
+                break
+
+            titulo_el = card.select_one(".ui-search-item__title")
+            link_el = card.select_one("a.ui-search-link")
+            preco_el = card.select_one(".andes-money-amount__fraction")
+
+            if not titulo_el or not link_el or not preco_el:
+                continue
+
+            nome = titulo_el.get_text(" ").strip()
+            link = link_el.get("href")
+            preco = limpar_preco(preco_el.get_text(" "))
+
+            if nome and link and preco:
+                resultados.append({
+                    "nome": nome,
+                    "url": link,
+                    "preco": preco,
+                    "site": "Mercado Livre"
+                })
+
+        return resultados
+
+    except Exception as erro:
+        print(f"Erro ao buscar produtos no Mercado Livre: {erro}")
+        return []
