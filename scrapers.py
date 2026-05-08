@@ -2,7 +2,6 @@ import re
 import json
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 
 
 HEADERS = {
@@ -16,10 +15,14 @@ HEADERS = {
 }
 
 
-def limpar_url_amazon(url):
+def limpar_url(url):
     if "amazon.com.br/dp/" in url:
         codigo = url.split("/dp/")[1].split("/")[0].split("?")[0]
         return f"https://www.amazon.com.br/dp/{codigo}"
+
+    if "mercadolivre.com.br" in url and "?" in url:
+        return url.split("?")[0]
+
     return url
 
 
@@ -43,21 +46,59 @@ def limpar_preco(texto):
         return None
 
 
+def buscar_preco_meta(soup):
+    metas = [
+        {"property": "product:price:amount"},
+        {"property": "og:price:amount"},
+        {"name": "twitter:data1"},
+        {"itemprop": "price"},
+    ]
+
+    for meta in metas:
+        elemento = soup.find("meta", meta)
+
+        if elemento:
+            conteudo = elemento.get("content")
+            preco = limpar_preco(conteudo)
+
+            if preco:
+                return preco
+
+    return None
+
+
 def buscar_preco_json(soup):
     scripts = soup.find_all("script", type="application/ld+json")
 
     for script in scripts:
         try:
+            if not script.string:
+                continue
+
             dados = json.loads(script.string)
 
-            if isinstance(dados, dict):
-                offers = dados.get("offers")
+            if isinstance(dados, list):
+                itens = dados
+            else:
+                itens = [dados]
+
+            for item in itens:
+                if not isinstance(item, dict):
+                    continue
+
+                offers = item.get("offers")
 
                 if isinstance(offers, dict):
                     price = offers.get("price")
 
                     if price:
                         return float(str(price).replace(",", "."))
+
+                if isinstance(offers, list):
+                    for offer in offers:
+                        price = offer.get("price")
+                        if price:
+                            return float(str(price).replace(",", "."))
 
         except Exception:
             continue
@@ -67,9 +108,8 @@ def buscar_preco_json(soup):
 
 def buscar_preco_mercado_livre(soup):
     seletores = [
-        ".ui-pdp-price__second-line .andes-money-amount",
         ".ui-pdp-price__second-line .andes-money-amount__fraction",
-        ".ui-pdp-price__second-line",
+        ".ui-pdp-price__second-line .andes-money-amount",
         ".andes-money-amount__fraction",
         ".price-tag-fraction",
         ".poly-price__current .andes-money-amount__fraction",
@@ -83,13 +123,13 @@ def buscar_preco_mercado_livre(soup):
             if preco:
                 return preco
 
-    texto_pagina = soup.get_text(" ")
+    texto = soup.get_text(" ")
 
-    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto_pagina)
+    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
     if match:
         return limpar_preco(match.group())
 
-    match = re.search(r"R\$\s?[\d\.]+", texto_pagina)
+    match = re.search(r"R\$\s?[\d\.]+", texto)
     if match:
         return limpar_preco(match.group())
 
@@ -118,8 +158,8 @@ def buscar_preco_amazon(soup):
                 return preco
 
     texto = soup.get_text(" ")
-    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
 
+    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
     if match:
         return limpar_preco(match.group())
 
@@ -127,23 +167,8 @@ def buscar_preco_amazon(soup):
 
 
 def buscar_preco_generico(soup):
-    seletores = [
-        ".price",
-        ".product-price",
-        ".sale-price",
-        ".current-price",
-        "[data-testid='price']"
-    ]
-
-    for seletor in seletores:
-        elemento = soup.select_one(seletor)
-
-        if elemento:
-            preco = limpar_preco(elemento.get_text(" "))
-            if preco:
-                return preco
-
     texto = soup.get_text(" ")
+
     match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
 
     if match:
@@ -153,13 +178,13 @@ def buscar_preco_generico(soup):
 
 
 def buscar_preco(url):
-    url = limpar_url_amazon(url)
+    url = limpar_url(url)
 
     try:
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=5
+            timeout=8
         )
 
         if response.status_code != 200:
@@ -174,16 +199,20 @@ def buscar_preco(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
+        preco_meta = buscar_preco_meta(soup)
+        if preco_meta:
+            return preco_meta
+
         preco_json = buscar_preco_json(soup)
         if preco_json:
             return preco_json
 
-        if "mercadolivre.com" in url or "mercadolivre.com.br" in url:
+        if "mercadolivre.com" in url:
             preco_ml = buscar_preco_mercado_livre(soup)
             if preco_ml:
                 return preco_ml
 
-        if "amazon.com.br" in url or "amazon.com" in url:
+        if "amazon.com" in url:
             preco_amazon = buscar_preco_amazon(soup)
             if preco_amazon:
                 return preco_amazon
@@ -192,93 +221,9 @@ def buscar_preco(url):
         if preco_generico:
             return preco_generico
 
-        print("Preço não encontrado no HTML.")
+        print("Preço não encontrado.")
         return None
 
     except Exception as erro:
         print(f"Erro no scraper: {erro}")
         return None
-
-
-def buscar_produtos_mercado_livre(termo, limite=5):
-    termo_url = quote_plus(termo)
-    url_busca = f"https://lista.mercadolivre.com.br/{termo_url}"
-
-    try:
-        response = requests.get(
-            url_busca,
-            headers=HEADERS,
-            timeout=8
-        )
-
-        if response.status_code != 200:
-            print(f"Erro HTTP {response.status_code} na busca ML")
-            return []
-
-        html_lower = response.text.lower()
-
-        if "captcha" in html_lower or "digite os caracteres" in html_lower:
-            print("Mercado Livre retornou captcha/bloqueio.")
-            return []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        resultados = []
-
-        links = soup.select("a.poly-component__title")
-
-        if not links:
-            links = soup.select("a.ui-search-link")
-
-        if not links:
-            links = soup.select("a[href*='/MLB-']")
-
-        for link_el in links:
-            if len(resultados) >= limite:
-                break
-
-            try:
-                nome = link_el.get_text(" ").strip()
-                link = link_el.get("href")
-
-                if not nome or not link:
-                    continue
-
-                card = link_el
-
-                for _ in range(6):
-                    if card.parent:
-                        card = card.parent
-
-                    preco_el = (
-                        card.select_one(".andes-money-amount__fraction")
-                        or card.select_one(".price-tag-fraction")
-                        or card.select_one(".poly-price__current .andes-money-amount__fraction")
-                    )
-
-                    if preco_el:
-                        break
-
-                if not preco_el:
-                    continue
-
-                preco = limpar_preco(preco_el.get_text(" "))
-
-                if not preco:
-                    continue
-
-                resultados.append({
-                    "nome": nome,
-                    "url": link,
-                    "preco": preco,
-                    "site": "Mercado Livre"
-                })
-
-            except Exception:
-                continue
-
-        return resultados
-
-    except Exception as erro:
-        print(f"Erro ao buscar produtos no Mercado Livre: {erro}")
-        return []
