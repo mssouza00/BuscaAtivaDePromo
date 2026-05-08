@@ -1,7 +1,8 @@
 import os
 import logging
 from dotenv import load_dotenv
-from telegram import Update
+
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -11,6 +12,7 @@ from database import (
     listar_produtos,
     remover_produto
 )
+
 from price_checker import checar_precos
 
 
@@ -25,11 +27,24 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", 60))
 
 
+def menu_principal():
+    teclado = [
+        ["/listar", "/checar"],
+        ["/adicionar", "/remover"],
+        ["/start"]
+    ]
+
+    return ReplyKeyboardMarkup(
+        teclado,
+        resize_keyboard=True
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensagem = """
 Olá! Eu sou seu bot de monitoramento de preços.
 
-Comandos disponíveis:
+Use o menu abaixo ou digite os comandos:
 
 /adicionar Nome | Link | PreçoAlvo
 /listar
@@ -37,9 +52,13 @@ Comandos disponíveis:
 /checar
 
 Exemplo:
-/adicionar Mouse Gamer | https://site.com/produto | 150
+/adicionar tv | https://www.amazon.com.br/dp/B0GH2SC1XG | 1500
 """
-    await update.message.reply_text(mensagem)
+
+    await update.message.reply_text(
+        mensagem,
+        reply_markup=menu_principal()
+    )
 
 
 async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -47,12 +66,25 @@ async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.replace("/adicionar", "").strip()
 
     try:
-        nome, url, preco = texto.split("|")
+        partes = texto.split("|")
+
+        if len(partes) != 3:
+            raise ValueError("Formato inválido. Separe nome, link e preço usando |")
+
+        nome, url, preco = partes
 
         nome = nome.strip()
         url = url.strip()
+        preco = preco.strip()
+
+        if not nome:
+            raise ValueError("Nome do produto vazio.")
+
+        if not url.startswith("http"):
+            raise ValueError("Link inválido. O link precisa começar com http ou https.")
+
         preco = float(
-            preco.strip()
+            preco
             .replace("R$", "")
             .replace(".", "")
             .replace(",", ".")
@@ -63,16 +95,18 @@ async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Produto cadastrado!\n\n"
             f"Nome: {nome}\n"
-            f"Preço alvo: R$ {preco:.2f}"
+            f"Preço alvo: R$ {preco:.2f}",
+            reply_markup=menu_principal()
         )
 
-    except Exception:
+    except Exception as erro:
         await update.message.reply_text(
-            "Formato inválido.\n\n"
+            f"❌ Erro ao adicionar produto:\n{erro}\n\n"
             "Use assim:\n"
             "/adicionar Nome | Link | PreçoAlvo\n\n"
             "Exemplo:\n"
-            "/adicionar Mouse Gamer | https://site.com/produto | 150"
+            "/adicionar tv | https://www.amazon.com.br/dp/B0GH2SC1XG | 1500",
+            reply_markup=menu_principal()
         )
 
 
@@ -81,7 +115,10 @@ async def listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     produtos = listar_produtos(chat_id)
 
     if not produtos:
-        await update.message.reply_text("Você ainda não cadastrou produtos.")
+        await update.message.reply_text(
+            "Você ainda não cadastrou produtos.",
+            reply_markup=menu_principal()
+        )
         return
 
     mensagem = "📦 Produtos cadastrados:\n\n"
@@ -89,7 +126,12 @@ async def listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for produto in produtos:
         produto_id, nome, url, preco_alvo, ultimo_preco, ativo = produto
 
-        ultimo = f"R$ {ultimo_preco:.2f}" if ultimo_preco is not None else "Ainda não checado"
+        ultimo = (
+            f"R$ {ultimo_preco:.2f}"
+            if ultimo_preco is not None
+            else "Ainda não checado"
+        )
+
         status = "Ativo" if ativo == 1 else "Pausado"
 
         mensagem += (
@@ -101,7 +143,10 @@ async def listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Link: {url}\n\n"
         )
 
-    await update.message.reply_text(mensagem)
+    await update.message.reply_text(
+        mensagem,
+        reply_markup=menu_principal()
+    )
 
 
 async def remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,19 +156,46 @@ async def remover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         produto_id = int(context.args[0])
         remover_produto(chat_id, produto_id)
 
-        await update.message.reply_text(f"🗑 Produto ID {produto_id} removido.")
+        await update.message.reply_text(
+            f"🗑 Produto ID {produto_id} removido.",
+            reply_markup=menu_principal()
+        )
 
     except Exception:
         await update.message.reply_text(
             "Use assim:\n/remover ID\n\n"
-            "Exemplo:\n/remover 1"
+            "Exemplo:\n/remover 1",
+            reply_markup=menu_principal()
         )
 
 
 async def checar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Checando preços agora...")
-    await checar_precos(context.application)
-    await update.message.reply_text("✅ Checagem finalizada.")
+    chat_id = update.message.chat_id
+
+    await update.message.reply_text(
+        "🔎 Checando preços agora...",
+        reply_markup=menu_principal()
+    )
+
+    resultados = await checar_precos(
+        context.application,
+        chat_id_manual=chat_id
+    )
+
+    if not resultados:
+        await update.message.reply_text(
+            "Você ainda não tem produtos cadastrados.",
+            reply_markup=menu_principal()
+        )
+        return
+
+    mensagem = "✅ Resultado da checagem:\n\n"
+    mensagem += "\n\n--------------------\n\n".join(resultados)
+
+    await update.message.reply_text(
+        mensagem,
+        reply_markup=menu_principal()
+    )
 
 
 async def checar_agendado(app):
@@ -146,15 +218,18 @@ def main():
     app.add_handler(CommandHandler("checar", checar_manual))
 
     scheduler = AsyncIOScheduler()
+
     scheduler.add_job(
         checar_agendado,
         "interval",
         minutes=CHECK_INTERVAL_MINUTES,
         args=[app]
     )
+
     scheduler.start()
 
     logging.info("Bot iniciado no Railway...")
+
     app.run_polling()
 
 
