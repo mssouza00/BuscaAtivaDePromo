@@ -1,5 +1,5 @@
 import re
-import json
+import logging
 import requests
 from bs4 import BeautifulSoup
 
@@ -51,78 +51,95 @@ def limpar_preco(texto):
 
 
 def buscar_preco_amazon(soup):
-    seletores = [
+    """
+    Busca o preço à vista na Amazon, priorizando os seletores
+    do bloco principal de compra (corePriceDisplay).
+    Evita capturar parcelas ou preços de produtos relacionados.
+    """
+
+    # 1ª tentativa: seletores do bloco de compra principal (mais confiável)
+    seletores_prioritarios = [
+        "#corePriceDisplay_desktop_feature_div span.a-price.apexPriceToPay",
+        "#corePriceDisplay_desktop_feature_div span.a-price.priceToPay",
+        "#corePrice_feature_div span.a-price.apexPriceToPay",
+        "#corePrice_feature_div span.a-price.priceToPay",
+        "#apex_desktop_newAccordionRow span.a-price.apexPriceToPay",
         "span.a-price.apexPriceToPay",
         "span.a-price.priceToPay",
-        "span.a-price[data-a-color='priceToPay']",
-        "#corePriceDisplay_desktop_feature_div span.a-price",
-        "#corePrice_feature_div span.a-price",
-        "#apex_desktop span.a-price",
-        "#desktop_buybox span.a-price",
-        "#buybox span.a-price",
-        "span.a-price",
     ]
 
-    candidatos = []
+    for seletor in seletores_prioritarios:
+        elemento = soup.select_one(seletor)
 
-    for seletor in seletores:
-        elementos = soup.select(seletor)
+        if not elemento:
+            continue
 
-        for elemento in elementos:
-            whole = elemento.select_one(".a-price-whole")
-            fraction = elemento.select_one(".a-price-fraction")
+        # Prefere .a-offscreen pois contém o valor completo formatado
+        offscreen = elemento.select_one(".a-offscreen")
+        if offscreen:
+            preco = limpar_preco(offscreen.get_text(" ", strip=True))
+            if preco and preco > 1:
+                logging.info(f"Amazon preço encontrado via '{seletor}': R$ {preco}")
+                return {
+                    "preco": preco,
+                    "origem": f"Amazon: {seletor}"
+                }
 
-            if whole:
-                texto = whole.get_text("", strip=True)
+        # Fallback: monta o preço a partir de .a-price-whole + .a-price-fraction
+        whole = elemento.select_one(".a-price-whole")
+        fraction = elemento.select_one(".a-price-fraction")
 
-                if fraction:
-                    texto += "," + fraction.get_text("", strip=True)
+        if whole:
+            texto = whole.get_text("", strip=True).rstrip(",").rstrip(".")
+            if fraction:
+                texto += "," + fraction.get_text("", strip=True)
+            preco = limpar_preco(texto)
+            if preco and preco > 1:
+                logging.info(f"Amazon preço (whole/fraction) via '{seletor}': R$ {preco}")
+                return {
+                    "preco": preco,
+                    "origem": f"Amazon: {seletor} (whole/fraction)"
+                }
 
-                preco = limpar_preco(texto)
+    # 2ª tentativa: buybox geral (menos confiável, mas ainda restrito ao bloco de compra)
+    seletores_buybox = [
+        "#desktop_buybox span.a-price",
+        "#buybox span.a-price",
+    ]
 
-                if preco and preco > 100:
-                    candidatos.append((preco, seletor))
+    for seletor in seletores_buybox:
+        elemento = soup.select_one(seletor)
 
-            offscreen = elemento.select_one(".a-offscreen")
+        if not elemento:
+            continue
 
-            if offscreen:
-                preco = limpar_preco(offscreen.get_text(" ", strip=True))
+        offscreen = elemento.select_one(".a-offscreen")
+        if offscreen:
+            preco = limpar_preco(offscreen.get_text(" ", strip=True))
+            if preco and preco > 1:
+                logging.warning(
+                    f"Amazon: usando seletor de fallback '{seletor}'. "
+                    f"Preço capturado: R$ {preco}. Verifique se é o preço à vista."
+                )
+                return {
+                    "preco": preco,
+                    "origem": f"Amazon (fallback): {seletor} — verifique se é o preço à vista"
+                }
 
-                if preco and preco > 100:
-                    candidatos.append((preco, seletor + " .a-offscreen"))
-
-    if candidatos:
-        menor = min(candidatos, key=lambda x: x[0])
-        return {
-            "preco": menor[0],
-            "origem": f"Amazon: {menor[1]}"
-        }
-
-    texto = soup.get_text(" ")
-    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
-
-    candidatos_texto = []
-
-    for valor in valores:
-        preco = limpar_preco(valor)
-
-        if preco and preco > 500:
-            candidatos_texto.append(preco)
-
-    if candidatos_texto:
-        return {
-            "preco": min(candidatos_texto),
-            "origem": "Amazon: menor preço no texto"
-        }
-
+    # Nenhum seletor funcionou — NÃO faz fallback por texto para evitar pegar parcelas
+    logging.warning("Amazon: nenhum seletor de preço funcionou. Possível mudança no HTML ou CAPTCHA.")
     return None
 
 
 def buscar_preco_mercado_livre(soup):
+    """
+    Busca o preço no Mercado Livre priorizando o bloco principal de preço.
+    """
+
     seletores = [
-        ".ui-pdp-price__second-line",
-        ".ui-pdp-price",
-        ".ui-pdp-container__row--price",
+        ".ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-price .andes-money-amount",
+        ".ui-pdp-container__row--price .andes-money-amount",
         ".andes-money-amount",
     ]
 
@@ -143,22 +160,28 @@ def buscar_preco_mercado_livre(soup):
 
             preco = limpar_preco(texto)
 
-            if preco:
+            if preco and preco > 1:
+                logging.info(f"Mercado Livre preço encontrado via '{seletor}': R$ {preco}")
                 return {
                     "preco": preco,
                     "origem": f"Mercado Livre: {seletor}"
                 }
 
+    # Fallback por texto apenas se nenhum seletor funcionou
+    # Pega o primeiro valor válido encontrado (mais conservador que o anterior)
     texto = soup.get_text(" ")
-    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}|R\$\s?[\d\.]+", texto)
+    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
 
     for valor in valores:
         preco = limpar_preco(valor)
-
-        if preco and preco > 10:
+        if preco and preco > 1:
+            logging.warning(
+                f"Mercado Livre: usando fallback de texto. "
+                f"Preço capturado: R$ {preco}. Pode não ser o preço correto."
+            )
             return {
                 "preco": preco,
-                "origem": "Mercado Livre: texto da página"
+                "origem": "Mercado Livre (fallback texto) — verifique se é o preço correto"
             }
 
     return None
@@ -167,13 +190,15 @@ def buscar_preco_mercado_livre(soup):
 def buscar_preco_detalhado(url):
     url = limpar_url(url)
 
+    logging.info(f"Consultando URL: {url}")
+
     try:
         session = requests.Session()
 
         response = session.get(
             url,
             headers=HEADERS,
-            timeout=7,
+            timeout=10,
             cookies={
                 "i18n-prefs": "BRL",
                 "lc-acbpt": "pt_BR"
@@ -181,6 +206,7 @@ def buscar_preco_detalhado(url):
         )
 
         if response.status_code != 200:
+            logging.error(f"Erro HTTP {response.status_code} para URL: {url}")
             return {
                 "preco": None,
                 "origem": f"Erro HTTP {response.status_code}"
@@ -189,6 +215,7 @@ def buscar_preco_detalhado(url):
         html_lower = response.text.lower()
 
         if "captcha" in html_lower or "digite os caracteres" in html_lower:
+            logging.warning(f"CAPTCHA detectado para URL: {url}")
             return {
                 "preco": None,
                 "origem": "Site retornou captcha/bloqueio"
@@ -199,19 +226,23 @@ def buscar_preco_detalhado(url):
         if "amazon.com" in url:
             resultado = buscar_preco_amazon(soup)
             if resultado:
+                logging.info(f"Resultado Amazon — Preço: R$ {resultado['preco']} | Origem: {resultado['origem']}")
                 return resultado
 
         if "mercadolivre.com" in url:
             resultado = buscar_preco_mercado_livre(soup)
             if resultado:
+                logging.info(f"Resultado ML — Preço: R$ {resultado['preco']} | Origem: {resultado['origem']}")
                 return resultado
 
+        logging.warning(f"Preço não encontrado para URL: {url}")
         return {
             "preco": None,
-            "origem": "Preço não encontrado no HTML recebido pelo Railway"
+            "origem": "Preço não encontrado no HTML recebido"
         }
 
     except Exception as erro:
+        logging.error(f"Erro no scraper para {url}: {erro}")
         return {
             "preco": None,
             "origem": f"Erro no scraper: {erro}"
