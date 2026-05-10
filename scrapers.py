@@ -12,6 +12,7 @@ HEADERS = {
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.amazon.com.br/",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
 }
@@ -50,16 +51,21 @@ def limpar_preco(texto):
 
 
 def buscar_preco_amazon(soup):
-    seletores_preco_principal = [
+    seletores = [
         "span.a-price.apexPriceToPay",
+        "span.a-price.priceToPay",
         "span.a-price[data-a-color='priceToPay']",
         "#corePriceDisplay_desktop_feature_div span.a-price",
         "#corePrice_feature_div span.a-price",
         "#apex_desktop span.a-price",
         "#desktop_buybox span.a-price",
+        "#buybox span.a-price",
+        "span.a-price",
     ]
 
-    for seletor in seletores_preco_principal:
+    candidatos = []
+
+    for seletor in seletores:
         elementos = soup.select(seletor)
 
         for elemento in elementos:
@@ -67,69 +73,60 @@ def buscar_preco_amazon(soup):
             fraction = elemento.select_one(".a-price-fraction")
 
             if whole:
-                texto = whole.get_text(strip=True)
+                texto = whole.get_text("", strip=True)
 
                 if fraction:
-                    texto += "," + fraction.get_text(strip=True)
+                    texto += "," + fraction.get_text("", strip=True)
 
                 preco = limpar_preco(texto)
 
                 if preco and preco > 100:
-                    return {
-                        "preco": preco,
-                        "origem": f"Amazon: preço principal {seletor}"
-                    }
+                    candidatos.append((preco, seletor))
 
-    seletores_offscreen = [
-        "span.a-price.apexPriceToPay span.a-offscreen",
-        "span.a-price[data-a-color='priceToPay'] span.a-offscreen",
-        "#corePriceDisplay_desktop_feature_div span.a-offscreen",
-        "#corePrice_feature_div span.a-offscreen",
-        "#apex_desktop span.a-offscreen",
-        "#desktop_buybox span.a-offscreen",
-    ]
+            offscreen = elemento.select_one(".a-offscreen")
 
-    for seletor in seletores_offscreen:
-        elementos = soup.select(seletor)
+            if offscreen:
+                preco = limpar_preco(offscreen.get_text(" ", strip=True))
 
-        for elemento in elementos:
-            texto = elemento.get_text(" ", strip=True)
-            preco = limpar_preco(texto)
+                if preco and preco > 100:
+                    candidatos.append((preco, seletor + " .a-offscreen"))
 
-            if preco and preco > 100:
-                return {
-                    "preco": preco,
-                    "origem": f"Amazon: offscreen {seletor}"
-                }
+    if candidatos:
+        menor = min(candidatos, key=lambda x: x[0])
+        return {
+            "preco": menor[0],
+            "origem": f"Amazon: {menor[1]}"
+        }
 
     texto = soup.get_text(" ")
     valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
 
-    candidatos = []
+    candidatos_texto = []
 
     for valor in valores:
         preco = limpar_preco(valor)
 
         if preco and preco > 500:
-            candidatos.append(preco)
+            candidatos_texto.append(preco)
 
-    if candidatos:
+    if candidatos_texto:
         return {
-            "preco": min(candidatos),
-            "origem": "Amazon: menor preço encontrado no texto"
+            "preco": min(candidatos_texto),
+            "origem": "Amazon: menor preço no texto"
         }
 
     return None
 
 
 def buscar_preco_mercado_livre(soup):
-    blocos = [
+    seletores = [
         ".ui-pdp-price__second-line",
         ".ui-pdp-price",
         ".ui-pdp-container__row--price",
+        ".andes-money-amount",
     ]
 
-    for seletor in blocos:
+    for seletor in seletores:
         bloco = soup.select_one(seletor)
 
         if not bloco:
@@ -139,10 +136,10 @@ def buscar_preco_mercado_livre(soup):
         cents = bloco.select_one(".andes-money-amount__cents")
 
         if fraction:
-            texto = fraction.get_text(strip=True)
+            texto = fraction.get_text("", strip=True)
 
             if cents:
-                texto += "," + cents.get_text(strip=True)
+                texto += "," + cents.get_text("", strip=True)
 
             preco = limpar_preco(texto)
 
@@ -155,104 +152,14 @@ def buscar_preco_mercado_livre(soup):
     texto = soup.get_text(" ")
     valores = re.findall(r"R\$\s?[\d\.]+,\d{2}|R\$\s?[\d\.]+", texto)
 
-    candidatos = []
-
     for valor in valores:
         preco = limpar_preco(valor)
 
         if preco and preco > 10:
-            candidatos.append(preco)
-
-    if candidatos:
-        return {
-            "preco": candidatos[0],
-            "origem": "Mercado Livre: texto da página"
-        }
-
-    return None
-
-
-def buscar_preco_meta(soup):
-    metas = [
-        {"property": "product:price:amount"},
-        {"property": "og:price:amount"},
-        {"itemprop": "price"},
-    ]
-
-    for meta in metas:
-        elemento = soup.find("meta", meta)
-
-        if elemento:
-            preco = limpar_preco(elemento.get("content"))
-
-            if preco:
-                return {
-                    "preco": preco,
-                    "origem": f"Meta: {meta}"
-                }
-
-    return None
-
-
-def buscar_preco_json(soup):
-    scripts = soup.find_all("script", type="application/ld+json")
-
-    for script in scripts:
-        try:
-            if not script.string:
-                continue
-
-            dados = json.loads(script.string)
-            itens = dados if isinstance(dados, list) else [dados]
-
-            for item in itens:
-                if not isinstance(item, dict):
-                    continue
-
-                offers = item.get("offers")
-
-                if isinstance(offers, dict):
-                    price = offers.get("price")
-
-                    if price:
-                        return {
-                            "preco": float(str(price).replace(",", ".")),
-                            "origem": "JSON-LD: offers.price"
-                        }
-
-                if isinstance(offers, list):
-                    for offer in offers:
-                        price = offer.get("price")
-
-                        if price:
-                            return {
-                                "preco": float(str(price).replace(",", ".")),
-                                "origem": "JSON-LD: offers[].price"
-                            }
-
-        except Exception:
-            continue
-
-    return None
-
-
-def buscar_preco_generico(soup):
-    texto = soup.get_text(" ")
-    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
-
-    candidatos = []
-
-    for valor in valores:
-        preco = limpar_preco(valor)
-
-        if preco and preco > 10:
-            candidatos.append(preco)
-
-    if candidatos:
-        return {
-            "preco": candidatos[0],
-            "origem": "Genérico: texto da página"
-        }
+            return {
+                "preco": preco,
+                "origem": "Mercado Livre: texto da página"
+            }
 
     return None
 
@@ -261,21 +168,31 @@ def buscar_preco_detalhado(url):
     url = limpar_url(url)
 
     try:
-        response = requests.get(
+        session = requests.Session()
+
+        response = session.get(
             url,
             headers=HEADERS,
-            timeout=10
+            timeout=7,
+            cookies={
+                "i18n-prefs": "BRL",
+                "lc-acbpt": "pt_BR"
+            }
         )
 
         if response.status_code != 200:
-            print(f"Erro HTTP {response.status_code} ao acessar {url}")
-            return None
+            return {
+                "preco": None,
+                "origem": f"Erro HTTP {response.status_code}"
+            }
 
         html_lower = response.text.lower()
 
         if "captcha" in html_lower or "digite os caracteres" in html_lower:
-            print("Site retornou captcha/bloqueio.")
-            return None
+            return {
+                "preco": None,
+                "origem": "Site retornou captcha/bloqueio"
+            }
 
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -289,30 +206,22 @@ def buscar_preco_detalhado(url):
             if resultado:
                 return resultado
 
-        resultado = buscar_preco_meta(soup)
-        if resultado:
-            return resultado
-
-        resultado = buscar_preco_json(soup)
-        if resultado:
-            return resultado
-
-        resultado = buscar_preco_generico(soup)
-        if resultado:
-            return resultado
-
-        print("Preço não encontrado.")
-        return None
+        return {
+            "preco": None,
+            "origem": "Preço não encontrado no HTML recebido pelo Railway"
+        }
 
     except Exception as erro:
-        print(f"Erro no scraper: {erro}")
-        return None
+        return {
+            "preco": None,
+            "origem": f"Erro no scraper: {erro}"
+        }
 
 
 def buscar_preco(url):
     resultado = buscar_preco_detalhado(url)
 
-    if resultado:
+    if resultado and resultado.get("preco"):
         return resultado["preco"]
 
     return None
