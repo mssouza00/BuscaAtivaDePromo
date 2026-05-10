@@ -49,63 +49,47 @@ def limpar_preco(texto):
         return None
 
 
-def montar_preco_amazon(bloco):
-    whole = bloco.select_one(".a-price-whole")
-    fraction = bloco.select_one(".a-price-fraction")
-
-    if not whole:
-        return None
-
-    texto_whole = whole.get_text(" ", strip=True)
-    texto_whole = texto_whole.replace(",", "").replace(".", ".")
-
-    if fraction:
-        texto = f"{texto_whole},{fraction.get_text(strip=True)}"
-    else:
-        texto = texto_whole
-
-    return limpar_preco(texto)
-
-
 def buscar_preco_amazon(soup):
-    blocos_prioritarios = [
-        "#corePrice_feature_div",
-        "#corePriceDisplay_desktop_feature_div",
-        "#apex_desktop",
-        "#desktop_buybox",
-        "#buybox",
-        "#ppd",
+    seletores_preco_principal = [
+        "span.a-price.apexPriceToPay",
+        "span.a-price[data-a-color='priceToPay']",
+        "#corePriceDisplay_desktop_feature_div span.a-price",
+        "#corePrice_feature_div span.a-price",
+        "#apex_desktop span.a-price",
+        "#desktop_buybox span.a-price",
     ]
 
-    for seletor in blocos_prioritarios:
-        bloco = soup.select_one(seletor)
+    for seletor in seletores_preco_principal:
+        elementos = soup.select(seletor)
 
-        if not bloco:
-            continue
+        for elemento in elementos:
+            whole = elemento.select_one(".a-price-whole")
+            fraction = elemento.select_one(".a-price-fraction")
 
-        preco = montar_preco_amazon(bloco)
+            if whole:
+                texto = whole.get_text(strip=True)
 
-        if preco and preco > 100:
-            return {
-                "preco": preco,
-                "origem": f"Amazon: preço montado em {seletor}"
-            }
+                if fraction:
+                    texto += "," + fraction.get_text(strip=True)
 
-    seletores = [
-        "#corePrice_feature_div .a-offscreen",
-        "#corePriceDisplay_desktop_feature_div .a-offscreen",
-        ".apexPriceToPay .a-offscreen",
-        ".priceToPay .a-offscreen",
-        ".a-price .a-offscreen",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
-        "#priceblock_saleprice",
-        "span.a-offscreen",
+                preco = limpar_preco(texto)
+
+                if preco and preco > 100:
+                    return {
+                        "preco": preco,
+                        "origem": f"Amazon: preço principal {seletor}"
+                    }
+
+    seletores_offscreen = [
+        "span.a-price.apexPriceToPay span.a-offscreen",
+        "span.a-price[data-a-color='priceToPay'] span.a-offscreen",
+        "#corePriceDisplay_desktop_feature_div span.a-offscreen",
+        "#corePrice_feature_div span.a-offscreen",
+        "#apex_desktop span.a-offscreen",
+        "#desktop_buybox span.a-offscreen",
     ]
 
-    candidatos = []
-
-    for seletor in seletores:
+    for seletor in seletores_offscreen:
         elementos = soup.select(seletor)
 
         for elemento in elementos:
@@ -113,42 +97,25 @@ def buscar_preco_amazon(soup):
             preco = limpar_preco(texto)
 
             if preco and preco > 100:
-                candidatos.append((preco, seletor))
-
-    if candidatos:
-        candidatos_validos = [
-            item for item in candidatos
-            if item[0] > 500
-        ]
-
-        if candidatos_validos:
-            menor_preco = min(candidatos_validos, key=lambda x: x[0])
-            return {
-                "preco": menor_preco[0],
-                "origem": f"Amazon: menor preço válido em {menor_preco[1]}"
-            }
-
-        preco = candidatos[0]
-        return {
-            "preco": preco[0],
-            "origem": f"Amazon: primeiro preço encontrado em {preco[1]}"
-        }
+                return {
+                    "preco": preco,
+                    "origem": f"Amazon: offscreen {seletor}"
+                }
 
     texto = soup.get_text(" ")
-
     valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
 
-    candidatos_texto = []
+    candidatos = []
 
     for valor in valores:
         preco = limpar_preco(valor)
 
         if preco and preco > 500:
-            candidatos_texto.append(preco)
+            candidatos.append(preco)
 
-    if candidatos_texto:
+    if candidatos:
         return {
-            "preco": min(candidatos_texto),
+            "preco": min(candidatos),
             "origem": "Amazon: menor preço encontrado no texto"
         }
 
@@ -252,6 +219,16 @@ def buscar_preco_json(soup):
                             "preco": float(str(price).replace(",", ".")),
                             "origem": "JSON-LD: offers.price"
                         }
+
+                if isinstance(offers, list):
+                    for offer in offers:
+                        price = offer.get("price")
+
+                        if price:
+                            return {
+                                "preco": float(str(price).replace(",", ".")),
+                                "origem": "JSON-LD: offers[].price"
+                            }
 
         except Exception:
             continue
