@@ -8,10 +8,12 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
 
 
@@ -30,7 +32,10 @@ def limpar_preco(texto):
     if not texto:
         return None
 
-    texto = texto.replace("\xa0", " ").replace("R$", "").strip()
+    texto = texto.replace("\xa0", " ")
+    texto = texto.replace("R$", "")
+    texto = texto.strip()
+
     match = re.search(r"[\d\.]+,\d{2}|[\d\.]+", texto)
 
     if not match:
@@ -40,61 +45,112 @@ def limpar_preco(texto):
 
     try:
         return float(valor)
-    except ValueError:
+    except Exception:
         return None
 
 
+def montar_preco_amazon(bloco):
+    whole = bloco.select_one(".a-price-whole")
+    fraction = bloco.select_one(".a-price-fraction")
+
+    if not whole:
+        return None
+
+    texto_whole = whole.get_text(" ", strip=True)
+    texto_whole = texto_whole.replace(",", "").replace(".", ".")
+
+    if fraction:
+        texto = f"{texto_whole},{fraction.get_text(strip=True)}"
+    else:
+        texto = texto_whole
+
+    return limpar_preco(texto)
+
+
 def buscar_preco_amazon(soup):
-    seletores_blocos = [
+    blocos_prioritarios = [
         "#corePrice_feature_div",
         "#corePriceDisplay_desktop_feature_div",
         "#apex_desktop",
         "#desktop_buybox",
         "#buybox",
+        "#ppd",
     ]
 
-    for seletor_bloco in seletores_blocos:
-        bloco = soup.select_one(seletor_bloco)
+    for seletor in blocos_prioritarios:
+        bloco = soup.select_one(seletor)
 
         if not bloco:
             continue
 
-        whole = bloco.select_one(".a-price-whole")
-        fraction = bloco.select_one(".a-price-fraction")
+        preco = montar_preco_amazon(bloco)
 
-        if whole:
-            texto = whole.get_text(strip=True)
+        if preco and preco > 100:
+            return {
+                "preco": preco,
+                "origem": f"Amazon: preço montado em {seletor}"
+            }
 
-            if fraction:
-                texto += "," + fraction.get_text(strip=True)
-
-            preco = limpar_preco(texto)
-
-            if preco:
-                return {
-                    "preco": preco,
-                    "origem": f"Amazon: preço principal em {seletor_bloco}"
-                }
-
-    seletores_prioritarios = [
-        "#corePrice_feature_div .priceToPay .a-offscreen",
-        "#corePrice_feature_div .a-price .a-offscreen",
+    seletores = [
+        "#corePrice_feature_div .a-offscreen",
         "#corePriceDisplay_desktop_feature_div .a-offscreen",
-        "#apex_desktop .a-price .a-offscreen",
-        "#desktop_buybox .a-price .a-offscreen",
+        ".apexPriceToPay .a-offscreen",
+        ".priceToPay .a-offscreen",
+        ".a-price .a-offscreen",
+        "#priceblock_ourprice",
+        "#priceblock_dealprice",
+        "#priceblock_saleprice",
+        "span.a-offscreen",
     ]
 
-    for seletor in seletores_prioritarios:
-        elemento = soup.select_one(seletor)
+    candidatos = []
 
-        if elemento:
-            preco = limpar_preco(elemento.get_text(" "))
+    for seletor in seletores:
+        elementos = soup.select(seletor)
 
-            if preco:
-                return {
-                    "preco": preco,
-                    "origem": f"Amazon: {seletor}"
-                }
+        for elemento in elementos:
+            texto = elemento.get_text(" ", strip=True)
+            preco = limpar_preco(texto)
+
+            if preco and preco > 100:
+                candidatos.append((preco, seletor))
+
+    if candidatos:
+        candidatos_validos = [
+            item for item in candidatos
+            if item[0] > 500
+        ]
+
+        if candidatos_validos:
+            menor_preco = min(candidatos_validos, key=lambda x: x[0])
+            return {
+                "preco": menor_preco[0],
+                "origem": f"Amazon: menor preço válido em {menor_preco[1]}"
+            }
+
+        preco = candidatos[0]
+        return {
+            "preco": preco[0],
+            "origem": f"Amazon: primeiro preço encontrado em {preco[1]}"
+        }
+
+    texto = soup.get_text(" ")
+
+    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
+
+    candidatos_texto = []
+
+    for valor in valores:
+        preco = limpar_preco(valor)
+
+        if preco and preco > 500:
+            candidatos_texto.append(preco)
+
+    if candidatos_texto:
+        return {
+            "preco": min(candidatos_texto),
+            "origem": "Amazon: menor preço encontrado no texto"
+        }
 
     return None
 
@@ -128,6 +184,23 @@ def buscar_preco_mercado_livre(soup):
                     "preco": preco,
                     "origem": f"Mercado Livre: {seletor}"
                 }
+
+    texto = soup.get_text(" ")
+    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}|R\$\s?[\d\.]+", texto)
+
+    candidatos = []
+
+    for valor in valores:
+        preco = limpar_preco(valor)
+
+        if preco and preco > 10:
+            candidatos.append(preco)
+
+    if candidatos:
+        return {
+            "preco": candidatos[0],
+            "origem": "Mercado Livre: texto da página"
+        }
 
     return None
 
@@ -188,11 +261,19 @@ def buscar_preco_json(soup):
 
 def buscar_preco_generico(soup):
     texto = soup.get_text(" ")
-    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
+    valores = re.findall(r"R\$\s?[\d\.]+,\d{2}", texto)
 
-    if match:
+    candidatos = []
+
+    for valor in valores:
+        preco = limpar_preco(valor)
+
+        if preco and preco > 10:
+            candidatos.append(preco)
+
+    if candidatos:
         return {
-            "preco": limpar_preco(match.group()),
+            "preco": candidatos[0],
             "origem": "Genérico: texto da página"
         }
 
@@ -206,7 +287,7 @@ def buscar_preco_detalhado(url):
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=8
+            timeout=10
         )
 
         if response.status_code != 200:
@@ -243,6 +324,7 @@ def buscar_preco_detalhado(url):
         if resultado:
             return resultado
 
+        print("Preço não encontrado.")
         return None
 
     except Exception as erro:
