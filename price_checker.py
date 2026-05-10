@@ -6,7 +6,7 @@ from database import (
     marcar_alerta,
     salvar_historico_preco
 )
-from scrapers import buscar_preco
+from scrapers import buscar_preco_detalhado
 
 
 async def checar_precos(app, chat_id_manual=None):
@@ -20,17 +20,20 @@ async def checar_precos(app, chat_id_manual=None):
             continue
 
         try:
-            preco_atual = await asyncio.wait_for(
-                asyncio.to_thread(buscar_preco, url),
-                timeout=6
+            resultado_preco = await asyncio.wait_for(
+                asyncio.to_thread(buscar_preco_detalhado, url),
+                timeout=10
             )
 
-            if preco_atual is None:
+            if resultado_preco is None:
                 resultados.append(
                     f"⚠️ {nome}\n"
                     f"Não consegui encontrar o preço."
                 )
                 continue
+
+            preco_atual = resultado_preco["preco"]
+            origem = resultado_preco["origem"]
 
             atualizar_preco(produto_id, preco_atual)
             salvar_historico_preco(produto_id, preco_atual)
@@ -40,7 +43,8 @@ async def checar_precos(app, chat_id_manual=None):
                     f"🔥 {nome}\n"
                     f"Preço atual: R$ {preco_atual:.2f}\n"
                     f"Preço alvo: R$ {preco_alvo:.2f}\n"
-                    f"✅ Está abaixo ou igual ao alvo!\n"
+                    f"✅ Está abaixo ou igual ao alvo!\n\n"
+                    f"Origem do preço: {origem}\n"
                     f"{url}"
                 )
 
@@ -59,7 +63,8 @@ async def checar_precos(app, chat_id_manual=None):
                     f"📦 {nome}\n"
                     f"Preço atual: R$ {preco_atual:.2f}\n"
                     f"Preço alvo: R$ {preco_alvo:.2f}\n"
-                    f"❌ R$ {diferenca:.2f} acima do alvo."
+                    f"❌ R$ {diferenca:.2f} acima do alvo.\n\n"
+                    f"Origem do preço: {origem}"
                 )
 
                 marcar_alerta(produto_id, 0)
@@ -78,4 +83,5 @@ async def checar_precos(app, chat_id_manual=None):
                 f"Erro: {erro}"
             )
 
+    return resultados
     return resultados

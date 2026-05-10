@@ -46,11 +46,129 @@ def limpar_preco(texto):
         return None
 
 
+def buscar_preco_mercado_livre(soup):
+    blocos_preco = [
+        ".ui-pdp-price__second-line",
+        ".ui-pdp-price",
+        ".ui-pdp-container__row--price",
+    ]
+
+    for bloco_selector in blocos_preco:
+        bloco = soup.select_one(bloco_selector)
+
+        if not bloco:
+            continue
+
+        fraction = bloco.select_one(".andes-money-amount__fraction")
+        cents = bloco.select_one(".andes-money-amount__cents")
+
+        if fraction:
+            texto = fraction.get_text(strip=True)
+
+            if cents:
+                texto += "," + cents.get_text(strip=True)
+
+            preco = limpar_preco(texto)
+
+            if preco:
+                return {
+                    "preco": preco,
+                    "origem": f"Mercado Livre: {bloco_selector}"
+                }
+
+    seletores = [
+        ".andes-money-amount__fraction",
+        ".price-tag-fraction",
+        ".poly-price__current .andes-money-amount__fraction",
+    ]
+
+    for seletor in seletores:
+        elemento = soup.select_one(seletor)
+
+        if elemento:
+            preco = limpar_preco(elemento.get_text(" "))
+
+            if preco:
+                return {
+                    "preco": preco,
+                    "origem": f"Mercado Livre: {seletor}"
+                }
+
+    texto = soup.get_text(" ")
+
+    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
+    if match:
+        return {
+            "preco": limpar_preco(match.group()),
+            "origem": "Mercado Livre: texto da página com centavos"
+        }
+
+    match = re.search(r"R\$\s?[\d\.]+", texto)
+    if match:
+        return {
+            "preco": limpar_preco(match.group()),
+            "origem": "Mercado Livre: texto da página"
+        }
+
+    return None
+
+
+def buscar_preco_amazon(soup):
+    seletores_prioritarios = [
+        "#corePrice_feature_div .a-price .a-offscreen",
+        "#corePrice_feature_div span.a-offscreen",
+        "#corePriceDisplay_desktop_feature_div .a-offscreen",
+        ".apexPriceToPay .a-offscreen",
+        "#priceblock_ourprice",
+        "#priceblock_dealprice",
+        "#priceblock_saleprice",
+    ]
+
+    for seletor in seletores_prioritarios:
+        elemento = soup.select_one(seletor)
+
+        if elemento:
+            preco = limpar_preco(elemento.get_text(" "))
+
+            if preco:
+                return {
+                    "preco": preco,
+                    "origem": f"Amazon: {seletor}"
+                }
+
+    textos_invalidos = [
+        "de:",
+        "preço anterior",
+        "economize",
+        "cupom",
+        "parcelas",
+        "sem juros"
+    ]
+
+    candidatos = soup.select("span.a-offscreen")
+
+    for elemento in candidatos:
+        texto = elemento.get_text(" ").strip()
+        texto_lower = texto.lower()
+
+        if any(invalido in texto_lower for invalido in textos_invalidos):
+            continue
+
+        preco = limpar_preco(texto)
+
+        if preco:
+            return {
+                "preco": preco,
+                "origem": "Amazon: span.a-offscreen filtrado"
+            }
+
+    return None
+
+
 def buscar_preco_meta(soup):
     metas = [
         {"property": "product:price:amount"},
         {"property": "og:price:amount"},
-        {"name": "twitter:data1"},
         {"itemprop": "price"},
     ]
 
@@ -62,7 +180,10 @@ def buscar_preco_meta(soup):
             preco = limpar_preco(conteudo)
 
             if preco:
-                return preco
+                return {
+                    "preco": preco,
+                    "origem": f"Meta: {meta}"
+                }
 
     return None
 
@@ -92,76 +213,23 @@ def buscar_preco_json(soup):
                     price = offers.get("price")
 
                     if price:
-                        return float(str(price).replace(",", "."))
+                        return {
+                            "preco": float(str(price).replace(",", ".")),
+                            "origem": "JSON-LD: offers.price"
+                        }
 
                 if isinstance(offers, list):
                     for offer in offers:
                         price = offer.get("price")
+
                         if price:
-                            return float(str(price).replace(",", "."))
+                            return {
+                                "preco": float(str(price).replace(",", ".")),
+                                "origem": "JSON-LD: offers[].price"
+                            }
 
         except Exception:
             continue
-
-    return None
-
-
-def buscar_preco_mercado_livre(soup):
-    seletores = [
-        ".ui-pdp-price__second-line .andes-money-amount__fraction",
-        ".ui-pdp-price__second-line .andes-money-amount",
-        ".andes-money-amount__fraction",
-        ".price-tag-fraction",
-        ".poly-price__current .andes-money-amount__fraction",
-    ]
-
-    for seletor in seletores:
-        elemento = soup.select_one(seletor)
-
-        if elemento:
-            preco = limpar_preco(elemento.get_text(" "))
-            if preco:
-                return preco
-
-    texto = soup.get_text(" ")
-
-    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
-    if match:
-        return limpar_preco(match.group())
-
-    match = re.search(r"R\$\s?[\d\.]+", texto)
-    if match:
-        return limpar_preco(match.group())
-
-    return None
-
-
-def buscar_preco_amazon(soup):
-    seletores = [
-        "#corePrice_feature_div .a-offscreen",
-        "#corePriceDisplay_desktop_feature_div .a-offscreen",
-        ".apexPriceToPay .a-offscreen",
-        ".a-price .a-offscreen",
-        "span.a-price span.a-offscreen",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
-        "#priceblock_saleprice",
-        "span.a-offscreen",
-    ]
-
-    for seletor in seletores:
-        elemento = soup.select_one(seletor)
-
-        if elemento:
-            preco = limpar_preco(elemento.get_text(" "))
-            if preco:
-                return preco
-
-    texto = soup.get_text(" ")
-
-    match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
-    if match:
-        return limpar_preco(match.group())
 
     return None
 
@@ -172,12 +240,15 @@ def buscar_preco_generico(soup):
     match = re.search(r"R\$\s?[\d\.]+,\d{2}", texto)
 
     if match:
-        return limpar_preco(match.group())
+        return {
+            "preco": limpar_preco(match.group()),
+            "origem": "Genérico: texto da página"
+        }
 
     return None
 
 
-def buscar_preco(url):
+def buscar_preco_detalhado(url):
     url = limpar_url(url)
 
     try:
@@ -199,27 +270,27 @@ def buscar_preco(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        preco_meta = buscar_preco_meta(soup)
-        if preco_meta:
-            return preco_meta
-
-        preco_json = buscar_preco_json(soup)
-        if preco_json:
-            return preco_json
-
         if "mercadolivre.com" in url:
-            preco_ml = buscar_preco_mercado_livre(soup)
-            if preco_ml:
-                return preco_ml
+            resultado = buscar_preco_mercado_livre(soup)
+            if resultado:
+                return resultado
 
         if "amazon.com" in url:
-            preco_amazon = buscar_preco_amazon(soup)
-            if preco_amazon:
-                return preco_amazon
+            resultado = buscar_preco_amazon(soup)
+            if resultado:
+                return resultado
 
-        preco_generico = buscar_preco_generico(soup)
-        if preco_generico:
-            return preco_generico
+        resultado = buscar_preco_meta(soup)
+        if resultado:
+            return resultado
+
+        resultado = buscar_preco_json(soup)
+        if resultado:
+            return resultado
+
+        resultado = buscar_preco_generico(soup)
+        if resultado:
+            return resultado
 
         print("Preço não encontrado.")
         return None
@@ -227,3 +298,12 @@ def buscar_preco(url):
     except Exception as erro:
         print(f"Erro no scraper: {erro}")
         return None
+
+
+def buscar_preco(url):
+    resultado = buscar_preco_detalhado(url)
+
+    if resultado:
+        return resultado["preco"]
+
+    return None
