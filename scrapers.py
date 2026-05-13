@@ -83,7 +83,7 @@ def buscar_preco_amazon(soup):
 
                 preco = limpar_preco(texto)
 
-                if preco and preco > 50:  # ✅ Ajustado de 100 para 50
+                if preco and preco > 50:
                     candidatos.append((preco, seletor))
 
             offscreen = elemento.select_one(".a-offscreen")
@@ -91,10 +91,10 @@ def buscar_preco_amazon(soup):
             if offscreen:
                 preco = limpar_preco(offscreen.get_text(" ", strip=True))
 
-                if preco and preco > 50:  # ✅ Ajustado de 100 para 50
+                if preco and preco > 50:
                     candidatos.append((preco, seletor + " .a-offscreen"))
 
-        # ✅ Se achou candidatos no seletor mais prioritário, para aqui
+        # Se achou candidatos no seletor mais prioritário, para aqui
         if candidatos:
             break
 
@@ -186,6 +186,11 @@ def buscar_preco_detalhado(url):
                 "lc-acbpt": "pt_BR"
             }
         )
+
+        # ✅ DEBUG: salva o HTML recebido para inspecionar o seletor correto
+        with open("debug_amazon.html", "w", encoding="utf-8") as f:
+            f.write(response.text)
+        print(f"[DEBUG] HTML salvo em debug_amazon.html | Status: {response.status_code}")
 
         if response.status_code != 200:
             return {
