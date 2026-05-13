@@ -52,6 +52,9 @@ def limpar_preco(texto):
 
 def buscar_preco_amazon(soup):
     seletores = [
+        # ✅ Seletor exato encontrado via DevTools (mais específico, tem prioridade)
+        "span.a-price.aok-align-center.apex-pricetopay-value",
+        # Seletores anteriores como fallback
         "span.a-price.apexPriceToPay",
         "span.a-price.priceToPay",
         "span.a-price[data-a-color='priceToPay']",
@@ -80,7 +83,7 @@ def buscar_preco_amazon(soup):
 
                 preco = limpar_preco(texto)
 
-                if preco and preco > 100:
+                if preco and preco > 50:  # ✅ Ajustado de 100 para 50
                     candidatos.append((preco, seletor))
 
             offscreen = elemento.select_one(".a-offscreen")
@@ -88,8 +91,12 @@ def buscar_preco_amazon(soup):
             if offscreen:
                 preco = limpar_preco(offscreen.get_text(" ", strip=True))
 
-                if preco and preco > 100:
+                if preco and preco > 50:  # ✅ Ajustado de 100 para 50
                     candidatos.append((preco, seletor + " .a-offscreen"))
+
+        # ✅ Se achou candidatos no seletor mais prioritário, para aqui
+        if candidatos:
+            break
 
     if candidatos:
         menor = min(candidatos, key=lambda x: x[0])
